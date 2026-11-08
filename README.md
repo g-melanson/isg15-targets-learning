@@ -79,22 +79,6 @@ The forward pass packs the padded batch, runs the LSTM, then extracts the hidden
 
 ---
 
-
-
-## Results (dev checkpoint)
-
-
-| ACC   | BACC  | SN    | SP    | MCC   | Kappa | F1    | AUC   | AUPRC |
-| ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- |
-| 0.923 | 0.582 | 0.185 | 0.978 | 0.231 | 0.215 | 0.250 | 0.763 | 0.233 |
-
-
-The class imbalance is severe (most lysines are unmodified). AUC=0.76 and AUPRC=0.23 are the more informative headline numbers.
-
----
-
-
-
 ## Project layout
 
 ```
