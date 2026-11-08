@@ -1,0 +1,117 @@
+component:
+  id: cli
+  module: cli.py
+  responsibility: >
+    Single-file argparse script that orchestrates the full pipeline through
+    five subcommands. Each subcommand maps to one logical stage; they can be
+    run individually (resuming mid-pipeline) or all at once via `run`.
+
+  invocation: python cli.py <subcommand> [options]
+
+  # ------------------------------------------------------------------
+  # Subcommands
+  # ------------------------------------------------------------------
+  subcommands:
+
+    prepare:
+      description: load → filter → build_corpus → retrieve_fasta → build_lysine_index
+      outputs:
+        - data/proteins.fasta
+        - data/corpus.pkl          # pickle of (df_modified, df_unmodified)
+        - data/lysine_corpus.pkl   # pickle of df_corpus
+      options:
+        --raw-dir:    default=data/raw
+        --fasta-out:  default=data/proteins.fasta
+        --corpus-out: default=data/corpus.pkl
+        --lysine-out: default=data/lysine_corpus.pkl
+
+    split:
+      description: split_by_homology — homology-aware train/val/test via graph-part
+      inputs:  [data/proteins.fasta]
+      outputs: [data/split_assignments.csv]
+      options:
+        --fasta-in:  default=data/proteins.fasta
+        --split-out: default=data/split_assignments.csv
+
+    embed:
+      description: embed_sequences — ProtT5 per-residue embeddings → embeddings.h5
+      inputs:  [data/proteins.fasta, data/split_assignments.csv, data/lysine_corpus.pkl]
+      outputs: [data/embeddings.h5]
+      options:
+        --fasta-in:       default=data/proteins.fasta
+        --split-in:       default=data/split_assignments.csv
+        --lysine-in:      default=data/lysine_corpus.pkl
+        --embeddings-out: default=data/embeddings.h5
+        --device:         choices=[auto, cpu, cuda, mps], default=auto
+
+    train:
+      description: train — BiLSTM with focal loss, AdamW, gradient accumulation
+      inputs:  [data/embeddings.h5]
+      outputs: [checkpoints/best_model.pt, logs/train_log.csv]
+      options:
+        --embeddings-in:        default=data/embeddings.h5
+        --epochs:               type=int,   default=50
+        --lr:                   type=float, default=1e-4
+        --weight-decay:         type=float, default=1e-3
+        --effective-batch-size: type=int,   default=128
+        --batch-size:           type=int,   default=32   # physical; accumulation fills the rest
+        --bucket-width:         type=int,   default=50
+        --checkpoint-dir:       default=checkpoints
+        --log-dir:              default=logs
+        --device:               choices=[auto, cpu, cuda, mps], default=auto
+
+    evaluate:
+      description: evaluate — load best checkpoint, compute 9 metrics on test split
+      inputs:  [data/embeddings.h5, checkpoints/best_model.pt]
+      outputs: [results/metrics.json]
+      options:
+        --embeddings-in: default=data/embeddings.h5
+        --checkpoint:    default=checkpoints/best_model.pt
+        --batch-size:    type=int, default=32
+        --bucket-width:  type=int, default=50
+        --device:        choices=[auto, cpu, cuda, mps], default=auto
+
+    run:
+      description: >
+        Full pipeline in order: prepare → split → embed → train → evaluate.
+        Each stage is skipped if its primary output already exists.
+      options:
+        --force: flag — re-run all stages even if outputs exist
+        (union of all per-subcommand options above)
+      path_wiring: >
+        At the start of cmd_run, output paths are explicitly wired to the
+        corresponding input args before any stage is called:
+          args.fasta_in      = args.fasta_out
+          args.split_in      = args.split_out
+          args.lysine_in     = args.lysine_out
+          args.embeddings_in = args.embeddings_out
+        This ensures that a custom --fasta-out (e.g. data/dev/proteins.fasta)
+        is also used as the input for subsequent stages, rather than each
+        stage silently falling back to its own default path.
+        Without this wiring, passing custom output paths to `run` would cause
+        downstream _require() checks to fail against the default paths.
+
+  # ------------------------------------------------------------------
+  # Shared helpers (defined once, used across subcommands)
+  # ------------------------------------------------------------------
+  helpers:
+    _resolve(path):  pathlib.Path(path).resolve()
+    _device(choice): >
+      Returns torch.device. "auto" selects CUDA > MPS > CPU.
+      Hard-fails if cuda/mps explicitly requested but unavailable.
+    _require(path, produced_by): >
+      sys.exit with a clear message if path does not exist,
+      e.g. "data/proteins.fasta not found. Run `python cli.py prepare` first."
+
+  # ------------------------------------------------------------------
+  # Contracts
+  # ------------------------------------------------------------------
+  contracts:
+    - python cli.py --help lists all 6 subcommands
+    - python cli.py <sub> --help shows that subcommand's options with defaults
+    - missing input files produce sys.exit (no Python traceback)
+    - --device cuda with no CUDA available produces sys.exit
+    - run skips a stage when its primary output exists (unless --force)
+
+  runtime_dependencies:
+    - all 11 pipeline components (waves 1–5)

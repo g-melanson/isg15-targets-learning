@@ -1,0 +1,77 @@
+component:
+  id: bilstm_classifier
+  module: src/models/bilstm.py
+  responsibility: >
+    Classify individual lysine sites as ISGylated or not by passing full protein
+    embeddings through a bidirectional LSTM and extracting the hidden state at
+    the target lysine position.
+
+  interface:
+    class: FullSequenceBiLSTMClassifier(nn.Module)
+    constructor_args:
+      - name: input_size
+        type: int
+        default: 1024
+      - name: hidden_size
+        type: int
+        default: 256
+      - name: num_layers
+        type: int
+        default: 2
+      - name: dropout
+        type: float
+        default: 0.5
+      - name: bidirectional
+        type: bool
+        default: true
+
+    forward:
+      signature: forward(x, seq_lengths, target_k_indices) -> logits
+      inputs:
+        - name: x
+          type: "torch.Tensor"
+          shape: "(B, L_max, 1024)"
+          description: Padded ProtT5 embeddings
+        - name: seq_lengths
+          type: "torch.Tensor"
+          shape: "(B,)"
+          description: Actual unpadded lengths; used for pack_padded_sequence
+        - name: target_k_indices
+          type: "torch.Tensor"
+          shape: "(B,)"
+          description: 0-indexed positions of the target lysine in each sequence
+      outputs:
+        - name: logits
+          type: "torch.Tensor"
+          shape: "(B, 1)"
+          description: Raw scalar logit per sample (no sigmoid applied here)
+
+  architecture:
+    lstm:
+      type: nn.LSTM
+      input_size: 1024
+      hidden_size: 256
+      num_layers: 2
+      dropout: 0.5
+      bidirectional: true
+      batch_first: true
+    packing: >
+      Input packed with pack_padded_sequence before LSTM;
+      unpacked with pad_packed_sequence after LSTM.
+      Sequences must be sorted by length descending (or use enforce_sorted=False).
+    lysine_extraction: >
+      lstm_out[torch.arange(B), target_k_indices]  → shape (B, 512)
+      This selects the BiLSTM hidden state at the target lysine position.
+      Output dim = hidden_size * 2 = 512 (bidirectional).
+    fc_head:
+      type: nn.Linear
+      in_features: 512
+      out_features: 1
+
+  contracts:
+    - forward output shape == (B, 1) for any valid batch
+    - model has no trainable parameters beyond lstm + fc_head
+    - torchinfo.summary(model, ...) confirms parameter count and output shapes
+    - no sigmoid in forward (applied by loss function at training time)
+
+  notes: Dropout is applied between LSTM layers, not after the FC head.

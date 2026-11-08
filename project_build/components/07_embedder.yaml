@@ -1,0 +1,66 @@
+component:
+  id: embedder
+  module: src/data/embedder.py
+  responsibility: >
+    Embed full-length protein sequences with ProtT5 and write per-protein
+    embeddings plus corpus metadata to a compressed HDF5 registry.
+
+  interface:
+    signature: embed_sequences(fasta_path, split_assignments, df_corpus, out_path) -> None
+    inputs:
+      - name: fasta_path
+        type: pathlib.Path
+        description: proteins.fasta; source of sequences to embed
+      - name: split_assignments
+        type: pd.DataFrame
+        schema: split_schema  # from dataset_splitter
+      - name: df_corpus
+        type: pd.DataFrame
+        schema: corpus_schema  # from lysine_index_builder; provides target_k_index and label
+      - name: out_path
+        type: pathlib.Path
+        description: Destination HDF5 path (e.g. data/embeddings.h5)
+    outputs:
+      - name: None
+        description: Writes embeddings.h5 in place; returns nothing
+
+  hdf5_structure:
+    embeddings_group:
+      key: "/embeddings/<protein_id>"
+      shape: "(L, 1024)"
+      dtype: float32
+      compression: gzip or lzf
+      description: One dataset per protein; L = sequence length; 1024 = ProtT5 dim
+    metadata_table:
+      key: "/metadata"
+      format: pandas DataFrame stored as HDF5 table
+      columns:
+        protein_id: str
+        split: str        # train / val / test
+        target_k_index: int
+        label: int        # 1 = modified, 0 = unmodified
+
+  model:
+    name: ProtT5-XL-UniRef50
+    library: transformers (Rostlab/prot_t5_xl_uniref50)
+    input: full-length amino-acid sequence (no windowing, no truncation)
+    output: per-residue embedding tensor (L, 1024)
+
+  contracts:
+    - only proteins in split_assignments["protein_id"] are embedded
+    - for every protein_id in split_assignments, h5["embeddings/<protein_id>"].shape == (L, 1024)
+    - h5["embeddings/<protein_id>"].dtype == float32
+    - len(h5["/metadata"]) == len(df_corpus)
+    - re-running does not re-embed proteins already in the registry (idempotent)
+
+  runtime_dependencies:
+    - fasta_retriever    # outputs proteins.fasta
+    - dataset_splitter   # outputs split_assignments.csv
+    - lysine_index_builder  # outputs df_corpus with target_k_index and label
+
+  notes: >
+    Before inference, check if protein_id already exists as a key in the HDF5 file
+    and skip it if so. This makes re-runs safe and cheap.
+    Wrap the embedding loop in tqdm showing proteins embedded / total with
+    current protein_id in the postfix.
+    Never window or truncate — ProtT5 handles variable-length sequences natively.

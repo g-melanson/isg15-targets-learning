@@ -1,0 +1,61 @@
+component:
+  id: data_loader
+  module: src/data/loader.py
+  responsibility: >
+    Load MaxQuant evidence and GlyGly(K)Sites TSV files from one or more dataset
+    directories into typed, NaN-free DataFrames tagged with their source dataset.
+
+  interface:
+    signature: load_raw_data(dataset_dirs) -> (df_evidence, df_ksites)
+    inputs:
+      - name: dataset_dirs
+        type: list[pathlib.Path]
+        description: >
+          Each directory must contain evidence.txt and GlyGly (K)Sites.txt.
+          The dataset ID is derived from the directory name (e.g. "8604_txt" → "8604").
+    outputs:
+      - name: df_evidence
+        type: pd.DataFrame
+        schema: evidence_schema
+      - name: df_ksites
+        type: pd.DataFrame
+        schema: ksite_schema
+
+  schemas:
+    evidence_schema:
+      id: int
+      Proteins: "list[str]"           # split from semicolon-delimited string at load time
+      Score: float
+      Delta score: float
+      Mass error [ppm]: float
+      Length: int
+      PEP: float
+      Potential contaminant: str      # NaN → ""
+      Reverse: str                    # NaN → ""
+      GlyGly (K) site IDs: "list[int]"  # split from semicolon-delimited string at load time
+      GlyGly (K): int
+      source_dataset: str             # one_of: ["8604", "8739"]
+
+    ksite_schema:
+      id: int
+      Protein: str
+      Position: int
+      Localization prob: float
+      source_dataset: str             # one_of: ["8604", "8739"]
+
+  contracts:
+    - df_evidence.isna().sum().sum() == 0
+    - df_ksites.isna().sum().sum() == 0
+    - set(df_evidence["source_dataset"]) == {"8604", "8739"}
+    - set(df_ksites["source_dataset"]) == {"8604", "8739"}
+    - df_evidence["Proteins"].apply(lambda x: isinstance(x, list)).all()
+    - df_evidence["GlyGly (K) site IDs"].apply(lambda x: isinstance(x, list)).all()
+    - len(df_evidence) == sum of line counts of each evidence.txt minus headers
+    - len(df_ksites) == sum of line counts of each GlyGly(K)Sites.txt minus headers
+
+  runtime_dependencies: []
+
+  notes: >
+    Cast dtypes explicitly — never rely on pandas inference. Use identity elements
+    for NaN fill: 0 for int/float, "" for str, [] for list. The id column is local
+    to each MaxQuant run; source_dataset namespaces it across experiments.

@@ -1,0 +1,147 @@
+orchestration:
+  goal: >
+    Implement all 11 components of the ISG15 target prediction pipeline.
+    Each component is a single Python module specified in project_overview/components/.
+
+  your_role: >
+    Spawn waves → await completions → verify all contracts → spawn next wave.
+    You do not write implementation code.
+
+  precondition:
+    description: >
+      Verify before spawning wave 1. If any precondition fails, halt and report to the user.
+    checks:
+      - An environment file (environment.yaml or requirements.txt) exists and all
+        dependencies install cleanly in a fresh environment.
+      - note: >
+          Agents across waves will import torch, biopython, pandas, h5py, and
+          transformers. Lock versions now — silent version mismatches cause
+          hard-to-diagnose integration failures at wave 3+.
+
+  agent_protocol:
+    instruction: |
+      Read the spec at the path given in `spec:`.
+      Implement the module at the path specified in `module:` within that spec.
+      Your implementation must satisfy every entry in `contracts`.
+      Do not add functionality beyond what the spec describes.
+      When done, run the contracts as Python assertions and report:
+        DONE <component_id> | contracts: pass | module: <path>
+      If a contract fails, fix the implementation before reporting done.
+      Write your status line to project_overview/status/<component_id>.done.
+
+  waves:
+    # Waves are ordered by schema stability, not just runtime data dependency.
+    # Schemas in earlier waves must be stable before later waves build against them.
+    # Within each wave, all agents run in parallel.
+
+    - wave: 1
+      rationale: >
+        data_loader defines the DataFrame schemas (column names, dtypes, list types)
+        that every downstream component type-hints against. Lock these in first to
+        prevent interface disagreements in later waves.
+      agents:
+        - component: data_loader
+          spec: project_overview/components/01_data_loader.yaml
+          module: src/data/loader.py
+      verify_before_next_wave:
+        - src/data/loader.py exists and is importable
+        - load_raw_data(dataset_dirs) -> (df_evidence, df_ksites) is callable with correct signature
+        - all contracts in 01_data_loader.yaml pass against real data
+
+    - wave: 2
+      rationale: >
+        filter_cleaner transforms data_loader schemas (needs wave 1 stable).
+        fasta_retriever, bilstm_classifier, trainer, and evaluator are
+        independent of the data pipeline schemas — buildable now.
+        NOTE: trainer and evaluator are fully implemented here but cannot be
+        executed until the full pipeline has run through wave 5.
+      agents:
+        - component: filter_cleaner
+          spec: project_overview/components/02_filter_cleaner.yaml
+          module: src/data/filter.py
+        - component: fasta_retriever
+          spec: project_overview/components/04_fasta_retriever.yaml
+          module: src/data/fasta.py
+        - component: bilstm_classifier
+          spec: project_overview/components/09_bilstm_classifier.yaml
+          module: src/models/bilstm.py
+        - component: trainer
+          spec: project_overview/components/10_trainer.yaml
+          module: src/training/trainer.py
+        - component: evaluator
+          spec: project_overview/components/11_evaluator.yaml
+          module: src/training/evaluator.py
+      verify_before_next_wave:
+        - all 5 modules exist and are importable
+        - filter_evidence(df_evidence) and filter_ksites(df_ksites) callable with correct signatures
+        - retrieve_fasta(protein_ids, out_path) -> Path callable with correct signature
+        - FullSequenceBiLSTMClassifier instantiates; forward(x, seq_lengths, target_k_indices) runs on a dummy batch
+        - train(model, train_loader, val_loader, cfg) and evaluate(model, test_loader, checkpoint_path) callable
+        - all contracts in wave 2 specs pass
+
+    - wave: 3
+      rationale: >
+        merge_labeler uses filter_cleaner output schemas (needs wave 2 stable).
+        bucket_sampler's HDF5Dataset interface is fully specified in its YAML —
+        buildable now that the model interface is stable.
+      agents:
+        - component: merge_labeler
+          spec: project_overview/components/03_merge_labeler.yaml
+          module: src/data/merge.py
+        - component: bucket_sampler
+          spec: project_overview/components/08_bucket_sampler.yaml
+          module: src/data/bucket_sampler.py
+      verify_before_next_wave:
+        - both modules exist and are importable
+        - build_corpus(df_evidence_clean, df_ksites_clean) -> (df_modified, df_unmodified) callable
+        - BucketSampler instantiates; create_dataloader(h5_path, split, batch_size, bucket_width) callable
+        - all contracts in wave 3 specs pass
+
+    - wave: 4
+      rationale: >
+        lysine_index_builder requires both merge_labeler and fasta_retriever schemas
+        (waves 2+3). dataset_splitter is code-independent but placed here to avoid
+        blocking wave 5 unnecessarily.
+      agents:
+        - component: lysine_index_builder
+          spec: project_overview/components/05_lysine_index_builder.yaml
+          module: src/data/lysine.py
+        - component: dataset_splitter
+          spec: project_overview/components/06_dataset_splitter.yaml
+          module: src/data/split.py
+      verify_before_next_wave:
+        - both modules exist and are importable
+        - build_lysine_index(df_modified, df_unmodified, sequences) callable; parse_fasta helper present
+        - split_by_homology(fasta_path, out_path) callable; graph-part is importable or its CLI is accessible
+        - all contracts in wave 4 specs pass
+
+    - wave: 5
+      rationale: >
+        embedder depends on all data pipeline schemas and must run last in the
+        build sequence. Its HDF5 structure is what bucket_sampler reads at runtime.
+      agents:
+        - component: embedder
+          spec: project_overview/components/07_embedder.yaml
+          module: src/data/embedder.py
+      verify_before_next_wave:
+        - src/data/embedder.py exists and is importable
+        - embed_sequences(fasta_path, split_assignments, df_corpus, out_path) -> None callable
+        - idempotency logic present: re-running skips proteins already in the HDF5 registry
+        - all contracts in 07_embedder.yaml pass
+
+  failure_handling:
+    contract_failure: >
+      Spawn a repair agent with: the original component spec, the failing contract,
+      and the current implementation. The repair agent must fix only the failing
+      contract without breaking passing ones.
+      max_repair_attempts: 2. After 2 failed repairs, halt the wave and report to the user.
+    import_error: >
+      A module that cannot be imported is a blocking failure. The wave cannot
+      complete until all modules in it are importable.
+    schema_mismatch: >
+      If a downstream agent finds the upstream schema doesn't match its spec:
+      1. Check the upstream component spec for correctness.
+      2. If the spec is correct, spawn a repair agent for the upstream module
+         with the schema discrepancy as the failing contract.
+      3. If the spec is ambiguous, update the spec first, then re-spawn both
+         the upstream and downstream agents from scratch.

@@ -1,0 +1,100 @@
+component:
+  id: filter_cleaner
+  module: src/data/filter.py
+  responsibility: >
+    Apply quality-control filters to df_evidence and df_ksites to retain
+    only high-confidence, biologically meaningful peptide and site measurements.
+
+  schemas:
+    evidence_schema:
+      id: int
+      Proteins: "list[str]"           # split from semicolon-delimited string at load time
+      Score: float
+      Delta score: float
+      Mass error [ppm]: float
+      Length: int
+      PEP: float
+      Potential contaminant: str      # NaN → ""
+      Reverse: str                    # NaN → ""
+      GlyGly (K) site IDs: "list[int]"  # split from semicolon-delimited string at load time
+      GlyGly (K): int
+      source_dataset: str             # one_of: ["8604", "8739"]
+
+    ksite_schema:
+      id: int
+      Protein: str
+      Position: int
+      Localization prob: float
+      source_dataset: str             # one_of: ["8604", "8739"]
+
+  interface:
+    signature: filter_evidence(df_evidence) -> pd.DataFrame
+    inputs:
+      - name: df_evidence
+        type: pd.DataFrame
+        schema: evidence_schema 
+    outputs:
+      - name: df_evidence_clean
+        type: pd.DataFrame
+        schema: evidence_schema
+
+  interface_2:
+    signature: filter_ksites(df_ksites) -> pd.DataFrame
+    inputs:
+      - name: df_ksites
+        type: pd.DataFrame
+        schema: ksite_schema 
+    outputs:
+      - name: df_ksites_clean
+        type: pd.DataFrame
+        schema: ksite_schema
+
+  filters:
+    evidence:
+      - column: Reverse
+        condition: "!= '+'"
+        rationale: Exclude decoy hits from reversed database search
+      - column: Potential contaminant
+        condition: "!= '+'"
+        rationale: Exclude known contaminant sequences
+      - column: Proteins
+        condition: none start with REV_ or Cont_
+        rationale: Belt-and-suspenders contaminant removal at protein level
+      - column: Score
+        condition: ">= 40"
+        rationale: Andromeda score threshold for confident PSMs
+      - column: Delta score
+        condition: ">= 20"
+        rationale: Score gap to second-best match; filters ambiguous spectra
+      - column: Length
+        condition: ">= 7"
+        rationale: Minimum peptide length for reliable identification
+      - column: Mass error [ppm]
+        condition: "<= 5"
+        rationale: Instrument mass accuracy threshold
+      - column: PEP
+        condition: "< 0.01"
+        rationale: Posterior error probability; < 1% FDR at PSM level
+    ksites:
+      - column: Protein
+        condition: does not start with REV_ or Cont_
+      - column: Localization prob
+        condition: ">= 0.75"
+        rationale: 75% minimum confidence that modification is on this exact lysine
+
+  contracts:
+    - df_evidence_clean["Reverse"].isin(["+"]).sum() == 0
+    - df_evidence_clean["Potential contaminant"].isin(["+"]).sum() == 0
+    - df_evidence_clean["Proteins"].explode().str.startswith(("REV_", "Cont_")).sum() == 0
+    - (df_evidence_clean["Score"] >= 40).all()
+    - (df_evidence_clean["Delta score"] >= 20).all()
+    - (df_evidence_clean["Length"] >= 7).all()
+    - (df_evidence_clean["Mass error [ppm]"] <= 5).all()
+    - (df_evidence_clean["PEP"] < 0.01).all()
+    - df_ksites_clean["Protein"].str.startswith(("REV_", "Cont_")).sum() == 0
+    - (df_ksites_clean["Localization prob"] >= 0.75).all()
+    - len(df_evidence_clean) < len(df_evidence)  # something was removed
+    - len(df_ksites_clean) < len(df_ksites)
+
+  runtime_dependencies:
+    - data_loader  # outputs df_evidence, df_ksites

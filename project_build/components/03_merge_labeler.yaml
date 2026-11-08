@@ -1,0 +1,65 @@
+component:
+  id: merge_labeler
+  module: src/data/merge.py
+  responsibility: >
+    Join filtered evidence PSMs to their k-site records and produce two
+    labelled sets: modified proteins (ISGylation detected) and unmodified
+    proteins (ISGylation definitively absent across all PSMs).
+
+  interface:
+    signature: build_corpus(df_evidence_clean, df_ksites_clean) -> (df_modified, df_unmodified)
+    inputs:
+      - name: df_evidence_clean
+        type: pd.DataFrame
+        schema: evidence_schema  # from filter_cleaner
+      - name: df_ksites_clean
+        type: pd.DataFrame
+        schema: ksite_schema  # from filter_cleaner
+    outputs:
+      - name: df_modified
+        type: pd.DataFrame
+        schema: modified_schema
+      - name: df_unmodified
+        type: pd.DataFrame
+        schema: unmodified_schema
+
+  schemas:
+    modified_schema:
+      description: >
+        One row per PSM × k-site pair. Produced by:
+        1. Keep evidence rows where GlyGly (K) > 0 (modified peptides only).
+        2. Explode GlyGly (K) site IDs (one row per site ID).
+        3. Inner-join to df_ksites_clean on (source_dataset, site_id) = (source_dataset, id).
+      columns:
+        source_dataset: str
+        site_id: int              # from GlyGly (K) site IDs
+        Protein: str              # from df_ksites_clean
+        Position: int             # lysine position in protein (1-indexed, MaxQuant convention)
+        Localization prob: float
+        label: int                # always 1
+
+    unmodified_schema:
+      description: >
+        One row per evidence PSM for proteins with no detected ISGylation.
+        Produced by: keep evidence rows where GlyGly (K) == 0 AND none of the
+        listed Proteins appear in the modified protein set.
+      columns:
+        source_dataset: str
+        Proteins: "list[str]"
+        label: int                # always 0
+
+  contracts:
+    - (df_modified["label"] == 1).all()
+    - (df_unmodified["label"] == 0).all()
+    - len(df_modified) == len(exploded_evidence_with_glygly_gt_0)  # inner join must be lossless
+    - set(df_unmodified exploded Proteins).isdisjoint(set(df_modified["Protein"]))
+    - df_modified["Protein"].str.startswith(("REV_", "Cont_")).sum() == 0
+
+  runtime_dependencies:
+    - filter_cleaner  # outputs df_evidence_clean, df_ksites_clean
+
+  notes: >
+    The inner-join losslessness contract is a data-quality assertion: every
+    modified PSM must have a matching k-site record. Assert this with
+    assert len(df_modified) == n_exploded, f"Join lost {n_exploded - len(df_modified)} rows".
+    Print row counts and join match-rate before returning.

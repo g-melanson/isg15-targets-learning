@@ -1,0 +1,49 @@
+component:
+  id: dataset_splitter
+  module: src/data/split.py
+  responsibility: >
+    Assign each protein to train/val/test splits using homology-aware partitioning
+    so that no two proteins with > 30% sequence identity appear in different splits.
+
+  interface:
+    signature: split_by_homology(fasta_path, out_path) -> pd.DataFrame
+    inputs:
+      - name: fasta_path
+        type: pathlib.Path
+        description: proteins.fasta produced by fasta_retriever
+      - name: out_path
+        type: pathlib.Path
+        description: Destination CSV path (e.g. data/split_assignments.csv)
+    outputs:
+      - name: split_assignments
+        type: pd.DataFrame
+        schema: split_schema
+
+  schemas:
+    split_schema:
+      protein_id: str   # UniProt accession
+      split: str        # one_of: ["train", "val", "test"]
+
+  tool:
+    name: graph-part
+    repo: https://github.com/graph-part/graph-part
+    cli_args:
+      ratio: "0.70/0.15/0.15"
+      threshold: 0.30     # 30% sequence identity ceiling between splits
+    install: pip install graph-part
+    output: graph-part writes a CSV; parse it into the split_assignments DataFrame
+
+  contracts:
+    - set(split_assignments["split"]) == {"train", "val", "test"}
+    - split_assignments["protein_id"].nunique() == total proteins in fasta_path
+    - split_assignments["protein_id"].duplicated().sum() == 0
+    - split is assigned at protein level (every k-site for a protein is in the same split)
+    - train fraction ≈ 0.70, val ≈ 0.15, test ≈ 0.15 of protein count
+
+  runtime_dependencies:
+    - fasta_retriever  # outputs proteins.fasta
+
+  notes: >
+    ⚠ This step MUST run before embedding. Embedding only proteins in
+    split_assignments avoids wasted compute on discarded sequences.
+    After splitting, print protein counts and k-site sample counts per split.

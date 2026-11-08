@@ -1,0 +1,57 @@
+component:
+  id: bucket_sampler
+  module: src/data/bucket_sampler.py
+  responsibility: >
+    Group proteins by sequence length into buckets and build batches exclusively
+    within each bucket so that dynamic padding never exceeds the batch maximum.
+
+  interface:
+    class: BucketSampler(torch.utils.data.Sampler)
+    constructor_args:
+      - name: lengths
+        type: "list[int]"
+        description: Sequence length for every sample in the dataset, in index order
+      - name: batch_size
+        type: int
+      - name: bucket_width
+        type: int
+        description: Length range per bucket (e.g. 50 → bucket [0,50), [50,100), ...)
+
+    dataloader_factory:
+      signature: create_dataloader(h5_path, split, batch_size, bucket_width) -> DataLoader
+      description: >
+        Instantiates the HDF5Dataset, BucketSampler, and DataLoader in one call.
+        Returns a DataLoader ready for iteration.
+
+  batch_format:
+    yields: "(x, seq_lengths, target_k_indices, labels)"
+    x:
+      type: "torch.Tensor"
+      shape: "(B, L_max, 1024)"
+      description: Padded embeddings; L_max is the maximum length in this batch only
+    seq_lengths:
+      type: "torch.Tensor"
+      shape: "(B,)"
+      description: Actual (unpadded) length of each sequence in the batch
+    target_k_indices:
+      type: "torch.Tensor"
+      shape: "(B,)"
+      description: 0-indexed position of the target lysine in each sequence
+    labels:
+      type: "torch.Tensor"
+      shape: "(B,)"
+      dtype: float32
+
+  contracts:
+    - no batch contains padding beyond the maximum unpadded length in that batch
+    - x[i, seq_lengths[i]:, :].abs().sum() == 0 for all i  # padding is zero
+    - all samples in a batch come from the same length bucket
+    - smoke test passes without AssertionError
+
+  runtime_dependencies:
+    - embedder  # outputs embeddings.h5
+
+  notes: >
+    BucketSampler is a Sampler, not a Dataset. The HDF5Dataset class (defined in
+    this module) handles loading embeddings by index from embeddings.h5.
+    Dynamic padding is handled in a custom collate_fn passed to DataLoader.

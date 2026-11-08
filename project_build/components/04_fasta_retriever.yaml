@@ -1,0 +1,42 @@
+component:
+  id: fasta_retriever
+  module: src/data/fasta.py
+  responsibility: >
+    Fetch amino-acid sequences for a list of UniProt accessions from the
+    UniProt REST API and write them to a FASTA file.
+
+  interface:
+    signature: retrieve_fasta(protein_ids, out_path) -> Path
+    inputs:
+      - name: protein_ids
+        type: list[str]
+        description: Unique UniProt accession IDs (e.g. "P05161")
+      - name: out_path
+        type: pathlib.Path
+        description: Destination path for the output FASTA file (e.g. data/proteins.fasta)
+    outputs:
+      - name: fasta_path
+        type: pathlib.Path
+        description: Same as out_path; returned for chaining
+
+  api:
+    endpoint: "https://rest.uniprot.org/uniprotkb/stream"
+    params:
+      query: accession:P05161 OR accession:P41226 ...  # built from input list
+      format: fasta
+    reference: test.py::fetch_fasta demonstrates a working prototype of this call
+
+  contracts:
+    - len(records_written) == len(unique protein_ids)  # one entry per accession, no duplicates
+    - all sequences contain at least one 'K'  # proteins without lysine are logged as warnings, not errors
+    - out_path.exists() and out_path.stat().st_size > 0
+    - all FASTA headers follow ">sp|<accession>|..." or ">tr|<accession>|..." UniProt format
+
+  runtime_dependencies:
+    - filter_cleaner  # source of unique Protein IDs from df_ksites_clean["Protein"]
+
+  notes: >
+    Wrap retrieval in a tqdm progress bar showing accessions fetched / total.
+    Protein IDs come from df_ksites_clean["Protein"].unique().
+    Proteins with no lysine residue should log a warning and still be written
+    to the FASTA (downstream lysine_index_builder will handle them gracefully).

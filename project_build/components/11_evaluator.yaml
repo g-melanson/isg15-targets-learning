@@ -1,0 +1,56 @@
+component:
+  id: evaluator
+  module: src/training/evaluator.py
+  responsibility: >
+    Load the best checkpoint and compute all 9 per-site classification metrics
+    on the held-out test split.
+
+  note_on_execution: >
+    This component is USER-RUN. The agent writes the code; the user executes it.
+    Do not attempt to run training.
+
+  interface:
+    signature: evaluate(model, test_loader, checkpoint_path) -> dict
+    inputs:
+      - name: model
+        type: FullSequenceBiLSTMClassifier  # uninitialised; weights loaded inside
+      - name: test_loader
+        type: DataLoader  # test split from bucket_sampler
+      - name: checkpoint_path
+        type: pathlib.Path
+        description: Path to checkpoints/best_model.pt
+    outputs:
+      - name: metrics
+        type: dict[str, float]
+        description: All 9 metrics written to results/metrics.json
+
+  metrics:
+    unit: per site (not per protein)
+    split: test only (never train or val)
+    computed:
+      ACC:   Accuracy
+      BACC:  Balanced Accuracy
+      SN:    Sensitivity (Recall)
+      SP:    Specificity
+      MCC:   Matthews Correlation Coefficient
+      Kappa: Cohen's Kappa
+      F1:    F1-score
+      AUC:   Area Under ROC Curve
+      AUPRC: Area Under Precision-Recall Curve
+
+  output_file:
+    path: results/metrics.json
+    format: >
+      {"ACC": 0.xx, "BACC": 0.xx, "SN": 0.xx, "SP": 0.xx,
+       "MCC": 0.xx, "Kappa": 0.xx, "F1": 0.xx, "AUC": 0.xx, "AUPRC": 0.xx}
+
+  contracts:
+    - all 9 keys present in output dict
+    - all values are floats in [0.0, 1.0] (MCC is in [-1.0, 1.0])
+    - evaluation runs in torch.no_grad() context
+    - results/metrics.json written and parseable with json.load
+
+  runtime_dependencies:
+    - trainer        # outputs checkpoints/best_model.pt
+    - bucket_sampler # test_loader
+    - bilstm_classifier  # model architecture to load weights into

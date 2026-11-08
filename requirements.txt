@@ -1,0 +1,18 @@
+# ISG15 target prediction pipeline — locked dependencies
+# Python 3.14 / generated 2026-11-05
+biopython==1.88
+graph-part==1.0.2
+h5py==3.16.0
+tables==3.11.1
+numpy==2.5.3
+pandas==3.0.6
+protobuf==7.36.2
+requests==2.34.2
+runpod==2.0
+scikit-learn==1.9.1
+scipy==1.18.1
+sentencepiece==0.2.2
+torch==2.14.0
+torchinfo==1.8.0
+tqdm==4.70.1
+transformers==5.17.0

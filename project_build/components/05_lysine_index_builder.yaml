@@ -1,0 +1,72 @@
+component:
+  id: lysine_index_builder
+  module: src/data/lysine.py
+  responsibility: >
+    Assign a target_k_index (0-indexed position in full AA sequence) to every
+    row in the corpus via three passes: detected modified sites, undetected
+    lysines in modified proteins, and all lysines in unmodified proteins.
+
+  interface:
+    signature: build_lysine_index(df_modified, df_unmodified, sequences) -> pd.DataFrame
+    inputs:
+      - name: df_modified
+        type: pd.DataFrame
+        schema: modified_schema  # from merge_labeler
+      - name: df_unmodified
+        type: pd.DataFrame
+        schema: unmodified_schema  # from merge_labeler
+      - name: sequences
+        type: "dict[str, str]"
+        description: Mapping of UniProt accession → full amino-acid sequence (from FASTA)
+    outputs:
+      - name: df_corpus
+        type: pd.DataFrame
+        schema: corpus_schema
+
+  schemas:
+    corpus_schema:
+      Protein: str
+      target_k_index: int    # 0-indexed position in full sequence where sequence[idx] == 'K'
+      label: int             # 1 for modified, 0 for unmodified
+      source_dataset: str
+      sequence: str          # full AA sequence for the protein
+
+  passes:
+    pass_1:
+      name: Positive sites (detected ISGylation)
+      source: df_modified
+      logic: >
+        target_k_index = Position - 1 (convert MaxQuant 1-indexed Position to 0-indexed).
+        One row per df_modified row.
+      tqdm_label: "Pass 1 — positive k-sites"
+
+    pass_2:
+      name: Negative sites (undetected lysines in modified proteins)
+      source: df_modified proteins
+      logic: >
+        For each protein in df_modified, find all 'K' positions in its sequence.
+        Exclude positions already in Pass 1 for that protein.
+        Each remaining K position becomes a negative row (label=0).
+      tqdm_label: "Pass 2 — undetected lysines in modified proteins"
+
+    pass_3:
+      name: Negative sites (all lysines in unmodified proteins)
+      source: df_unmodified proteins
+      logic: >
+        For each protein in df_unmodified (not in df_modified), find all 'K'
+        positions in its sequence. Each K position becomes a negative row (label=0).
+      tqdm_label: "Pass 3 — lysines in unmodified proteins"
+
+  contracts:
+    - (df_corpus["target_k_index"] >= 0).all()
+    - df_corpus.apply(lambda r: r["sequence"][r["target_k_index"]] == 'K', axis=1).all()
+    - df_corpus["target_k_index"].isna().sum() == 0
+    - set(df_corpus[df_corpus["label"] == 1]["Protein"]) == set(df_modified["Protein"])
+
+  runtime_dependencies:
+    - merge_labeler   # outputs df_modified, df_unmodified
+    - fasta_retriever # outputs sequences dict (parsed from proteins.fasta)
+
+  notes: >
+    Parse the FASTA file into a dict[str, str] before calling build_lysine_index.
+    A helper parse_fasta(fasta_path) -> dict[str, str] in this module is appropriate.
