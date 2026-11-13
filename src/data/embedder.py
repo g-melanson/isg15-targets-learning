@@ -28,6 +28,7 @@ def embed_sequences(
     split_assignments: pd.DataFrame,   # schema: {protein_id: str, split: str}
     df_corpus: pd.DataFrame,           # schema: {Protein, target_k_index, label, source_dataset, sequence}
     out_path: pathlib.Path,            # e.g. data/embeddings.h5
+    device: torch.device = torch.device("cpu"),
 ) -> None:
     """Embed each protein in split_assignments with ProtT5 and write to HDF5.
 
@@ -49,6 +50,9 @@ def embed_sequences(
         ``source_dataset``, ``sequence``.
     out_path:
         Destination HDF5 path.
+    device:
+        Torch device for ProtT5 inference. Defaults to CPU; pass
+        ``torch.device("cuda")`` on a GPU machine to use the GPU.
     """
     # Import ProtT5 here — not at module level — so the module is importable
     # even when the model weights have not been downloaded.
@@ -57,7 +61,8 @@ def embed_sequences(
     tokenizer = T5Tokenizer.from_pretrained(
         "Rostlab/prot_t5_xl_uniref50", do_lower_case=False
     )
-    model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_uniref50")
+    model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_uniref50", torch_dtype=torch.float16)
+    model = model.to(device)
     model.eval()
 
     sequences: dict[str, str] = parse_fasta(fasta_path)
@@ -75,6 +80,7 @@ def embed_sequences(
         spaced_seq = " ".join(list(seq))
 
         ids = tokenizer(spaced_seq, return_tensors="pt", add_special_tokens=True)
+        ids = {k: v.to(device) for k, v in ids.items()}
         with torch.no_grad():
             output = model(input_ids=ids["input_ids"], attention_mask=ids["attention_mask"])
 

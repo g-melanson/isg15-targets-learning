@@ -1,0 +1,63 @@
+
+# Exact ids (Secure $/hr (estimate), VRAM):
+#   NVIDIA GeForce RTX 3090                 $0.50   24 GB
+#   NVIDIA A40                              $0.59   48 GB
+#   NVIDIA RTX A6000                        $0.59   48 GB
+#   NVIDIA L4                               $0.59   24 GB
+#   NVIDIA GeForce RTX 4090                 $0.89   24 GB
+#   NVIDIA RTX 6000 Ada Generation          $0.99   48 GB
+#   NVIDIA GeForce RTX 5090                 $1.19   32 GB
+#   NVIDIA A100 80GB PCIe                   $1.79   80 GB
+#   NVIDIA A100-SXM4-80GB                   $1.79   80 GB
+#   NVIDIA RTX PRO 6000 Blackwell Server Edition  $2.49  96 GB
+
+tasks:
+  embed:
+    gpu:
+      - NVIDIA A40
+      - NVIDIA RTX A6000
+      - NVIDIA RTX 6000 Ada Generation
+      - NVIDIA A100 80GB PCIe
+      - NVIDIA A100-SXM4-80GB
+      - NVIDIA L4
+      - NVIDIA GeForce RTX 5090
+      - NVIDIA GeForce RTX 4090
+      - NVIDIA GeForce RTX 3090
+
+  train:
+    gpu:
+      - NVIDIA A40
+      - NVIDIA RTX A6000
+      - NVIDIA RTX 6000 Ada Generation
+      - NVIDIA A100 80GB PCIe
+      - NVIDIA A100-SXM4-80GB
+      - NVIDIA L4
+      - NVIDIA GeForce RTX 5090
+      - NVIDIA GeForce RTX 4090
+      - NVIDIA GeForce RTX 3090
+
+dependencies:
+  - biopython==1.88
+  - h5py==3.16.0
+  - numpy==2.5.3
+  - pandas==3.0.6
+  - scikit-learn==1.9.1
+  - sentencepiece==0.2.2
+  - tables==3.11.1
+  - tqdm==4.70.1
+  - transformers==5.17.0
+
+# One network volume holds everything: pipeline artefacts, the uploaded src/
+# package, the ProtT5 weight cache (~12 GB), checkpoints and logs.
+# (The SDK permits at most one network volume per task.)
+#
+# `datacenter` is used only when the named volume does not exist yet. If
+# isg15-data already lives elsewhere, delete it first (data is still local):
+#   rp volume list
+#   rp volume delete -y <id>
+#   rp volume create --name isg15-data --size 50 --data-center US-IL-1 --type standard
+volume:
+  name: isg15-data
+  size_gb: 50
+  mount: /data
+  datacenter: US-IL-1
